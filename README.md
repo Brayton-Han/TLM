@@ -1,4 +1,4 @@
-# Trigram Language Model
+# TLM
 
 #### 陈俊含   19307130180   2021.12.21
 
@@ -176,8 +176,6 @@
 
    - 将 `out/artifacts/TLM/TLM.jar` 通过WinSCP上传到自己的Hadoop主目录
 
-     ![image-20211220182622009](C:\Users\dell\AppData\Roaming\Typora\typora-user-images\image-20211220182622009.png)
-
      
 
    - 通过`ssh`命令连接Hadoop机群
@@ -190,8 +188,6 @@
 
    - 耐心等待集群完成job
 
-     ![image-20211220182518201](C:\Users\dell\AppData\Roaming\Typora\typora-user-images\image-20211220182518201.png)
-
      
 
    - 将Hadoop中`./result`里的文件通过WinSCP传输到本地目录`Prediction/output/`下
@@ -200,9 +196,7 @@
 
    -  输出文件示例：
 
-     ![image-20211220183717905](C:\Users\dell\AppData\Roaming\Typora\typora-user-images\image-20211220183717905.png)
-
-   ​                            
+                               
 
 2. 关联词预测
 
@@ -214,7 +208,7 @@
 
    - 效果示意图：
 
-     ![3b096c5a35d90922355cc1b7e7cd44a](C:\Users\dell\Desktop\3b096c5a35d90922355cc1b7e7cd44a.png)
+     ![3b096c5a35d90922355cc1b7e7cd44a](https://github.com/Brayton-Han/TLM/blob/main/3b096c5a35d90922355cc1b7e7cd44a.png)
 
      
 
@@ -233,172 +227,3 @@
      - flask：`CORS(app, *support_credentials*=True)`
      - vue：`mode: 'cors'`
 5. java的split函数：python系的语法是`split(' ')`即可自动处理所有的空格并分割，但Java语法需要写成正则表达式`*String* str[] = line.split("\\s+")`，否则只会分割第一个空格。
-
-
-
-## 六、附录（主要代码文件）
-
-1. TLMMap.java
-
-   ```java
-   public class TLMMap extends Mapper<LongWritable, Text, Text, MyType> {
-   
-       public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
-           String line = value.toString();
-           String str[] = line.split("\\s+");  //注意不能简单用“ ”，不然只会分离第一个空格
-           HashMap<Text, MyType> map = new HashMap<Text, MyType>();
-   
-           for(int i=0; i<str.length-2; ++i) {
-               StringBuilder s = new StringBuilder();
-               s.append(str[i]).append(" ").append(str[i+1]);
-               Text ab = new Text(s.toString());
-               Text c = new Text(str[i+2]);
-   
-               if(!map.containsKey(ab)) {
-                   map.put(ab, new MyType());
-               }
-   
-               int val = (map.get(ab).containsKey(c) ? ((IntWritable) map.get(ab).get(c)).get(): 0);
-               map.get(ab).put(c, new IntWritable(val + 1));
-           }
-   
-           for(Entry<Text, MyType> entry : map.entrySet()) {
-               context.write(entry.getKey(), entry.getValue());
-           }
-       }
-   }
-   ```
-   
-2. TLMReduce.java
-
-   ```java
-   public class TLMReduce extends Reducer<Text, MyType, Text, MyType> {
-   
-       static long num;
-       public void reduce(Text key, Iterable<MyType> values, Context context) throws IOException, InterruptedException{
-           num = context.getConfiguration().getLong("num", 0);
-           MyType map = new MyType();
-           MapWritable sums = new MapWritable();
-   
-           for(MyType value : values){
-               for(Entry<Writable, Writable> entry : value.entrySet()) {
-                   Text k = (Text) entry.getKey();
-                   double val = (map.containsKey(k) ? ((DoubleWritable) map.get(k)).get(): 0);
-                   map.put(k, new DoubleWritable(val + ((IntWritable) entry.getValue()).get()));
-                   int v = (sums.containsKey(k) ? ((IntWritable)sums.get(k)).get() : 0);
-                   sums.put(k, new IntWritable(v + ((IntWritable) entry.getValue()).get()));
-               }
-           }
-   
-           map.replaceAll((k, v) -> new DoubleWritable((((DoubleWritable) v).get() + 1) / (((IntWritable)sums.get(k)).get() + num)));
-   
-           context.write(key, map);
-       }
-   }
-   ```
-   
-4. app.py
-
-   ```python
-   from flask import Flask, request
-   import json
-   from pathlib import Path
-   from typing import List
-   from flask_cors import CORS
-   
-   class TLM(object):
-       def __init__(self) -> None:
-           super().__init__()
-           self.__dict = {}
-   
-       def _read(self, filepath: Path) -> None:
-           with open(filepath, 'r', encoding='utf-8') as file:
-               for line in file:
-                   line_ = line.strip('\n').split('\t', 2)
-                   key = line_[0]
-                   dict_ = json.loads(line_[1])
-                   sorted_list = [key for key, value in sorted(dict_.items(), key = lambda kv:(kv[1], kv[0]), reverse=True)]
-                   self.__dict[key] = sorted_list
-   
-       def getList(self, words: str) -> List[str]:
-           return self.__dict.get(words, [])
-   
-   app = Flask(__name__)
-   CORS(app, support_credentials=True)
-   if __name__ == '__main__':
-       app.run()
-   
-   tlm = TLM()
-   
-   for i in range(0, 10):
-       p = "F:/output/part-r-0000" + str(i)
-       tlm._read(Path(p))
-   for i in range(10, 50):
-       p = "F:/output/part-r-000" + str(i)
-       tlm._read(Path(p))
-   for i in range(100, 256):
-       p = "F:/output/part-r-00" + str(i)
-       tlm._read(Path(p))
-   
-   @app.route('/predict', methods=['POST'])
-   def predict():
-       data = json.loads(request.data)
-       res_list = tlm.getList(data['prefix'])
-       reply = {'data': res_list}
-       return json.dumps(reply, ensure_ascii=False)
-   ```
-
-5. predict.vue
-
-   ```vue
-   <template>
-     <a-auto-complete
-       :dataSource="dataSource"
-       style="width: 400px"
-       size="large"
-       @search="handleSearch"
-       placeholder="please input..."
-     />
-   </template>
-   
-   <script>
-   let list
-   
-   function work (target) {
-     const prefix = list[list.length - 1] === '' ? list[list.length - 3] + ' ' + list[list.length - 2] : list[list.length - 2] + ' ' + list[list.length - 1]
-     fetch('http://localhost:5000/predict', {
-       method: 'POST',
-       mode: 'cors',
-       body: JSON.stringify({
-         prefix: prefix
-       })
-     }).then(function (data) {
-       return data.json()
-     }).then(function (d) {
-       const result = d.data
-       const data = []
-       result.forEach(row => { data.push(row) })
-       target(data)
-     })
-   }
-   
-   export default {
-     data () {
-       return {
-         dataSource: []
-       }
-     },
-   
-     methods: {
-       handleSearch (value) {
-         this.dataSource = []
-         list = value.split(' ')
-         if (list.length < 2) return
-         work(data => (this.dataSource = data))
-       }
-     }
-   }
-   </script>
-   ```
-
-
